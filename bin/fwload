@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+-------------------------------------------------------------------------
+NOME..: fwload.py
+LANG..: Python3
+TITULO: Carrega o arquivo YAML com as regras de firewall ativas
+DATA..: 01/11/2024
+VERSÃO: 0.1.00
+HOST..: diversos
+LOCAL.: diversos
+OBS...: colocar nas linhas abaixo informações importantes sobre o programa
+
+DEPEND: (informar nas linhas abaixo os recursos necessários para utilização)
+
+-------------------------------------------------------------------------
+Copyright (c) 2022 - Vya.Digital
+This script is licensed under GNU GPL version 2.0 ou acima
+-------------------------------------------------------------------------
+Modifications.....:
+ Date          Rev    Author           Description
+ 01/11/2024     1     Yves Marinho     Elaboração
+-------------------------------------------------------------------------
+PARÂMETROS (informar os parâmetros necessários no exemplo de utilização)
+-
+STATUS: (status em que se encontra o código DEV/PROD)
+DEV
+"""
+import logging
+import subprocess
+import sys
+import yaml
+from pathlib import Path
+from collections import OrderedDict
+
+
+def config_logging(file_name: str, file_path: str) -> bool:
+    """
+    Configura o logging para a aplicação.
+
+    :param file_name: Nome do arquivo de log.
+    :type file_name: str
+    :param file_path: Caminho do arquivo de log.
+    :type file_path: str
+    :return: True se a configuração foi bem-sucedida.
+    :rtype: bool
+    """
+    logger = logging.getLogger()
+    if logger.hasHandlers():
+        logging.info("Configuração de logging já existente, mantendo a configuração atual.")
+        return True
+    
+    log_file = Path(file_path).joinpath(file_name)
+    
+    logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s - %(levelname)s - %(threadName)s - %(funcName)s:%(lineno)d - %(name)s - %(message)s",
+            handlers=[
+                    logging.FileHandler(log_file),
+                    logging.StreamHandler()
+            ]
+    )
+    logging.info(f"=== Função: {sys._getframe().f_code.co_name} ===")
+    return True
+
+
+def parse_iptables_save(output):
+    """
+    Parse the output of `iptables-save` into a dictionary.
+
+    :param output: The output from `iptables-save`
+    :type output: str
+    :return: Parsed rules as a dictionary
+    :rtype: dict
+    """
+    logging.info("=== Função: %s ===" % (sys._getframe().f_code.co_name))
+    try:
+        rules = {}
+        current_table = None
+        for line in output.splitlines():
+            if line.startswith('*'):
+                current_table = line[1:]
+                rules[current_table] = []
+            elif line.startswith(':'):
+                chain, policy = line[1:].split(' ', 1)
+                rules[current_table].append({'chain': chain, 'policy': policy})
+            elif line.startswith('-A'):
+                rules[current_table].append({'rule': line})
+        return rules
+    except Exception as e:
+        logging.error(f"Erro ao fazer o parse do iptables-save: {e}")
+        logging.error("Exception occurred", exc_info=True)
+        return False
+
+def setup_yaml():
+    """
+    Use to preserve dict order from imported yaml config
+
+    :return: None
+    """
+    logging.info("=== Função: %s ===" % (sys._getframe().f_code.co_name))
+
+    represent_dict_order = lambda self, data: self.represent_mapping('tag:yaml.org,2002:map', data.items())
+    yaml.add_representer(OrderedDict, represent_dict_order)
+
+
+def save_active_rules(config_path: str) -> bool:
+    """
+    Coleta as regras ativas do Iptables e salva no arquivo de configuração.
+
+    :param config_path: Caminho para o arquivo de configuração YAML
+    :type config_path: str
+    :return: True se as regras foram salvas com sucesso, False caso contrário
+    :rtype: bool
+
+    >>> save_active_rules('/etc/fwgen/config.yml')
+    True
+    """
+    logging.info("=== Função: %s ===" % (sys._getframe().f_code.co_name))
+    try:
+        if not Path(config_path).exists():
+            raise FileNotFoundError(f"Config file {config_path} does not exist.")
+
+        #
+        logging.debug("=== Coleta as regras ativas do Iptables ===")
+        result = subprocess.run(['iptables-save'], capture_output=True, text=True, check=True)
+        active_rules = parse_iptables_save(result.stdout)
+        logging.info("=== Parâmetros recebidos ===")
+        logging.info(f"==> VAR: result TYPE: {type(result)}, CONTENT: {result}\n")
+        logging.info(f"==> VAR: active_rules TYPE: {type(active_rules)}, CONTENT: {active_rules}")
+        
+        logging.debug("=== Carrega a configuração existente ===")
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+        logging.debug("=== Atualiza a configuração com as regras ativas ===")
+        config['active_rules'] = active_rules
+
+        logging.debug("Salva a configuração atualizada")
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f)
+
+        return True
+    except Exception as e:
+        logging.error(f"Erro ao salvar as regras ativas: {e}")
+        return False
+
+if __name__ == '__main__':
+    # import doctest
+    # doctest.testmod()
+    config_logging('fwload.log', '/var/log/')
+    save_active_rules('/etc/config.yml')
