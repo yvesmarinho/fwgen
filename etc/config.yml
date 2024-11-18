@@ -1,0 +1,171 @@
+# Rules are applied both to iptables and ip6tables. Use '-4' or '-6' in the rule
+# entry to indicate family if rule are family specific. This is documented in
+# the ip(6)tables manual. However, only family specific rules are finally stored
+# to the restore files.
+
+variables:
+  web_server: 10.0.0.10
+
+# Example ipsets for use in the iptables rules via the set module
+ipsets:
+  servers_v4:
+    type: hash:net
+    entries:
+      - 192.168.0.0/24
+      - 192.168.1.0/24
+  servers_v6:
+    type: hash:net
+    options: family inet6
+    entries:
+      - fd12:3456:789a:1::/64
+      - fd12:3456:789a:2::/64
+  # If you add your inet and inet6 family sets to a list:set type of set
+  # you can use this set for both IPv4 and IPv6 rules, simplifying the ruleset.
+  servers:
+    type: list:set
+    entries:
+      - servers_v4
+      - servers_v6
+  dns_servers:
+    type: hash:ip
+    entries:
+      - 4.4.4.4
+      - 8.8.4.4
+
+global:
+  # You may override the default filter policies of "DROP". However, this is not really
+  # recommended. It is a better practice to add a explicit ACCEPT target where needed in
+  # the ruleset to prevent accidental holes in your firewall.
+  policy:
+    filter:
+      INPUT: ACCEPT
+      FORWARD: ACCEPT
+      OUTPUT: ACCEPT
+
+  # Create additonal chains here
+  helper_chains:
+    filter:
+      LOG_REJECT:
+        - '-j LOG --log-level warning --log-prefix "IPTABLES_REJECT: "'
+        - -j REJECT
+
+  rules:
+    # In some very rare cases you may want to put some rules even before the default
+    # rules. This is useful if you want to do some processing on packets that are
+    # part of an established session.
+    pre_default:
+      filter:
+        FORWARD:
+          - ...
+
+    # You can add rules that are processed before zone dispatching here.
+    # These will be hit for all interfaces, although they are still processed after
+    # the default rules.
+    pre_zone:
+      raw:
+        # Add TFTP conntrack helper (new behaviour as of kernel 4.7)
+        PREROUTING:
+          - -4 -p udp -d 10.0.0.200 --dport 69 -j CT --helper tftp
+
+zones:
+  dmz:
+    interfaces:
+      - eth3
+      - eth4
+  lan:
+    interfaces:
+      - eth0
+      - eth1
+    rules:
+      filter:
+        INPUT:
+          - -p tcp --dport 22 -j ACCEPT
+          - -4 -p icmp --imcp-type echo-request -j ACCEPT
+        OUTPUT:
+          - -j ACCEPT
+
+
+
+# Complete minimal example for a classic two interface gateway with NAT
+#
+# The default policy is DROP for filter table for both IPv4 and IPv6 and
+# ACCEPT for everything else, so an explicit ACCEPT is needed to pass traffic.
+# There is no need to add rules for return traffic as these are added at the
+# top of the ruleset via defaults.yml for maximum efficiency.
+zones:
+  LAN:
+    interfaces:
+      - eth0
+    rules:
+      filter:
+        INPUT:
+          - -j ACCEPT
+        FORWARD:
+          - -j ACCEPT
+        OUTPUT:
+          - -j ACCEPT
+  WAN:
+    interfaces:
+      - eth1
+    rules:
+      filter:
+        OUTPUT:
+          - -j ACCEPT
+      nat:
+        POSTROUTING:
+          - -4 -j MASQUERADE
+
+
+# Example with zone to zone rules and port forwarding. Use %{zone_name} whenever
+# you would use interface names in native iptables to automatically generate the
+# needed rules. ${variable} can be used for places where ipsets are overkill or
+# can't be used. The variable must be defined as a key in the variables dictionary.
+
+variables:
+  web_server: 10.0.0.10
+
+zones:
+  LAN:
+    interfaces:
+      - eth0
+    rules:
+      filter:
+        INPUT:
+          - -j ACCEPT
+        FORWARD:
+          - -o %{WAN} -j ACCEPT
+          - -o %{DMZ} -j ACCEPT
+          - -j CUSTOM_REJECT
+        OUTPUT:
+          - -j ACCEPT
+  WAN:
+    interfaces:
+      - eth1
+    rules:
+      filter:
+        FORWARD:
+          - -4 -o %{DMZ} -d ${web_server} -p tcp --dport 80 -j ACCEPT
+        OUTPUT:
+          - -j ACCEPT
+      nat:
+        PREROUTING:
+          - -4 -p tcp --dport 80 -j DNAT --to-destination ${web_server}
+        POSTROUTING:
+          - -4 -j MASQUERADE
+  DMZ:
+    interfaces:
+      - eth2
+    rules:
+      filter:
+        INPUT:
+          - -4 -p icmp --imcp-type echo-request -j ACCEPT
+          - -6 -p icmpv6 --icmpv6-type echo-request -j ACCEPT
+          - -6 -p icmpv6 --icmpv6-type neighbor-solicitation -j ACCEPT
+          - -j CUSTOM_REJECT
+        FORWARD:
+          - -o %{WAN} -j ACCEPT
+          - -j CUSTOM_REJECT
+        OUTPUT:
+          - -j ACCEPT
+
+# vim: ft=yaml

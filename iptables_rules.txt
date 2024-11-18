@@ -1,0 +1,55 @@
+# Variable: web_server = 10.0.0.10
+create servers_v4 hash:net
+add servers_v4 192.168.0.0/24
+add servers_v4 192.168.1.0/24
+create servers_v6 hash:net
+add servers_v6 fd12:3456:789a:1::/64
+add servers_v6 fd12:3456:789a:2::/64
+create servers list:set
+add servers servers_v4
+add servers servers_v6
+create dns_servers hash:ip
+add dns_servers 4.4.4.4
+add dns_servers 8.8.4.4
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+*filter
+:LOG_REJECT - [0:0]
+-A LOG_REJECT -j LOG --log-level warning --log-prefix "IPTABLES_REJECT: "
+-A LOG_REJECT -j REJECT
+*filter
+:INPUT ACCEPT [0:0]
+-A INPUT -j ACCEPT
+:FORWARD ACCEPT [0:0]
+-A FORWARD -o %{WAN} -j ACCEPT
+-A FORWARD -o %{DMZ} -j ACCEPT
+-A FORWARD -j CUSTOM_REJECT
+:OUTPUT ACCEPT [0:0]
+-A OUTPUT -j ACCEPT
+COMMIT
+*filter
+:FORWARD ACCEPT [0:0]
+-A FORWARD -4 -o %{DMZ} -d ${web_server} -p tcp --dport 80 -j ACCEPT
+:OUTPUT ACCEPT [0:0]
+-A OUTPUT -j ACCEPT
+COMMIT
+*nat
+:PREROUTING ACCEPT [0:0]
+-A PREROUTING -4 -p tcp --dport 80 -j DNAT --to-destination ${web_server}
+:POSTROUTING ACCEPT [0:0]
+-A POSTROUTING -4 -j MASQUERADE
+COMMIT
+*filter
+:INPUT ACCEPT [0:0]
+-A INPUT -4 -p icmp --imcp-type echo-request -j ACCEPT
+-A INPUT -6 -p icmpv6 --icmpv6-type echo-request -j ACCEPT
+-A INPUT -6 -p icmpv6 --icmpv6-type neighbor-solicitation -j ACCEPT
+-A INPUT -j CUSTOM_REJECT
+:FORWARD ACCEPT [0:0]
+-A FORWARD -o %{WAN} -j ACCEPT
+-A FORWARD -j CUSTOM_REJECT
+:OUTPUT ACCEPT [0:0]
+-A OUTPUT -j ACCEPT
+COMMIT
